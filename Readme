@@ -1,0 +1,27 @@
+# Cross-Source Join Advisor
+**DataHub x Nebius Hackathon — Problem 1**
+
+A system that uses DataHub metadata and Nebius AI to discover, test, and document join relationships across datasets.
+
+## Levels Achieved
+
+**Level 1** (`join_advisor.py`) — Reads schemas from DataHub REST API, Nebius identifies candidate join columns
+
+**Level 2** (`join_advisor_v2.py`, `write_joins.py`) — Writes join recommendations back to DataHub as custom properties, visible in the UI
+
+**Level 3** (`join_advisor_v3.py`) — Queries olist_dirty.db directly to compute:
+- Key overlap % (found 92% orders+customers, 71.8% items+sellers)
+- Cardinality (1:1 vs 1:many)
+- Orphan row counts (7,955 orphan orders, 5,632 orphan items)
+- Type compatibility
+- Generates working JOIN SQL with casting
+- Nebius rates each join SAFE/RISKY/UNSAFE
+
+## Key Findings
+- `olist_orders + olist_customers`: **RISKY** — 8% orphan orders (planted data issue)
+- `olist_order_items + olist_sellers`: **UNSAFE** — 28% key mismatch (seller ID format issue)
+
+## Stack
+- **DataHub** — metadata layer (schemas, lineage, tags, custom properties)
+- **Nebius AI** (DeepSeek-R1, Llama-3.3-70B) — reasoning engine
+- **SQLite** — actual data querying
