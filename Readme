@@ -1,27 +1,304 @@
-# Cross-Source Join Advisor
-**DataHub x Nebius Hackathon — Problem 1**
+# DataHub × Nebius Cross-Source Join Advisor
+**DataHub × Nebius Hackathon — Problem 1 — Entrepreneurs First SF, April 10, 2026**
 
-A system that uses DataHub metadata and Nebius AI to discover, test, and document join relationships across datasets.
+---
 
-## Levels Achieved
+## Why This Matters
 
-**Level 1** (`join_advisor.py`) — Reads schemas from DataHub REST API, Nebius identifies candidate join columns
+Every data team faces the same silent crisis: analysts spend hours — sometimes days — writing joins that look correct but silently fail. A customer ID in the CRM doesn't match the warehouse. A seller ID format changed between systems. A join that should return 100,000 rows returns 71,000, and nobody notices until a board meeting.
 
-**Level 2** (`join_advisor_v2.py`, `write_joins.py`) — Writes join recommendations back to DataHub as custom properties, visible in the UI
+The root cause is always the same: **nobody tested the join before trusting it.**
 
-**Level 3** (`join_advisor_v3.py`) — Queries olist_dirty.db directly to compute:
-- Key overlap % (found 92% orders+customers, 71.8% items+sellers)
-- Cardinality (1:1 vs 1:many)
-- Orphan row counts (7,955 orphan orders, 5,632 orphan items)
-- Type compatibility
-- Generates working JOIN SQL with casting
-- Nebius rates each join SAFE/RISKY/UNSAFE
+DataHub knows everything about your data — schemas, lineage, who owns what, what's sensitive, what terms mean what. Nebius can reason over all of that context intelligently. Together, they can do what no analyst has time to do manually: **automatically test every join, explain every risk, and document every finding — before anyone writes a single query.**
 
-## Key Findings
-- `olist_orders + olist_customers`: **RISKY** — 8% orphan orders (planted data issue)
-- `olist_order_items + olist_sellers`: **UNSAFE** — 28% key mismatch (seller ID format issue)
+This is not a toy. This pattern applies to any organization with data spread across multiple systems:
+- **E-commerce:** orders in one system, customers in another, sellers in a third
+- **Healthcare:** patients in EMR, billing in finance, claims in insurance
+- **Finance:** transactions in core banking, customers in CRM, risk in a separate model
+- **Any merger or acquisition:** two companies, two data models, zero trust
 
-## Stack
-- **DataHub** — metadata layer (schemas, lineage, tags, custom properties)
-- **Nebius AI** (DeepSeek-R1, Llama-3.3-70B) — reasoning engine
-- **SQLite** — actual data querying
+The question "can I trust this join?" is asked thousands of times a day across the data industry. This system answers it automatically.
+
+---
+
+## Summary: What We Built
+
+### Input
+- **DataHub metadata:** schemas, column types, tags (pii, financial, identifier), glossary terms (Order Status, Customer Identity), ownership (which team owns each table), lineage (view→table relationships)
+- **Real data:** `olist_dirty.db` — a Brazilian e-commerce SQLite database with 9 tables, 100K+ orders, and intentionally planted data quality issues
+
+### Process
+A 6-level system that progressively adds intelligence:
+1. Read metadata from DataHub → Nebius identifies join candidates
+2. Write join relationships back to DataHub
+3. Query real data to measure join quality mathematically
+4. Watch for new datasets and auto-analyze them
+5. Reason holistically about why problems exist
+6. Coordinate 3 specialized AI agents via DataHub as shared memory
+
+### Key Results Discovered
+
+| Join Pair | Overlap | Orphans | Finding |
+|-----------|---------|---------|---------|
+| olist_orders + olist_customers | 92% | 7,955 rows | 7,717 orphans are `delivered` orders → likely **GDPR customer purge after delivery** |
+| olist_orders + olist_order_payments | 100% | 1 row | ✅ Safe — near-perfect integrity |
+| olist_order_items + olist_products | 100% | 0 rows | ✅ Safe — perfect integrity |
+| olist_orders + olist_order_items | 99.2% | 775 rows | ✅ Safe — minor gaps |
+| olist_order_items + olist_sellers | 71.8% | 5,632 rows | ⚠️ **Seller ID format mismatch** — planted data issue confirmed |
+
+**PII Risks flagged:** olist_customers and olist_order_reviews carry `pii` tags — joining these without proper controls exposes sensitive customer data.
+
+**Cross-team warnings:** olist_orders (owned by data_platform_team) + olist_customers (owned by customer_experience_team) — requires cross-team coordination before joining.
+
+**GDPR insight:** The 7,955 orphan orders are not a bug. They are mostly `delivered` status, spread evenly across months — a pattern consistent with customer data being purged after order completion, not a sync failure.
+
+---
+
+## Step-by-Step: How to Run Everything
+
+```bash
+# 1. Activate environment
+conda activate myenv
+cd ~/static-assets/datasets/olist-ecommerce
+
+# 2. Run Level 1
+python join_advisor.py
+
+# 3. Run Level 2
+python join_advisor_v2.py
+
+# 4. Run Level 3 (queries real SQLite data)
+python join_advisor_v3.py
+
+# 5. Run Enhanced (deep DataHub integration)
+python join_advisor_enhanced.py
+
+# 6. Run Level 5 (holistic reasoning)
+python join_advisor_v5.py
+
+# 7. Run Level 6 (multi-agent)
+python join_advisor_v6.py
+
+# 8. Run Level 4 watcher (in one terminal)
+python watcher_v4_fixed.py
+# In another terminal, inject a new dataset:
+# python3 -c "import requests, json; ..."
+```
+
+View results: Open DataHub at `http://localhost:9002` → click any table → Properties tab
+
+---
+
+## File Reference
+
+---
+
+### `join_advisor.py` — Level 1
+
+**Objective:** Read all dataset schemas from DataHub and use Nebius AI to identify which tables can be joined and on which columns.
+
+**Input:**
+- DataHub REST API (`http://localhost:8080/openapi/v3/entity/dataset`)
+- 14 datasets (9 tables + 5 views) with column metadata
+
+**Process:**
+- Fetches all dataset entities from DataHub
+- Extracts column names for each table
+- Sends all schemas to Nebius (DeepSeek-R1-0528) with a prompt asking it to identify join candidates
+- Nebius reasons over column naming conventions and data types to find relationships
+
+**Output:**
+- Printed JOIN ADVISOR REPORT in the terminal
+- Identifies 7 safe join pairs with explanations of cardinality and risk
+- Example: "olist_orders + olist_customers → join on customer_id ✅ Safe — standard FK relationship"
+
+---
+
+### `join_advisor_v2.py` + `write_joins.py` — Level 2
+
+**Objective:** Write the join recommendations discovered by Nebius back into DataHub as documented connections, making them visible to the entire data team.
+
+**Input:**
+- Same DataHub schemas as Level 1
+- Hardcoded join pairs validated by Nebius reasoning
+
+**Process:**
+- Uses DataHub's `/aspects?action=ingestProposal` REST endpoint
+- Writes custom properties to each dataset entity
+- Each property encodes: join partner table, join column, safety rating, and reason
+
+**Output:**
+- Custom properties visible in DataHub UI → click any table → Properties tab
+- Example on olist_orders: `join_with_olist_customers = customer_id | SAFE | FK relationship`
+- 4 join properties written to olist_orders, 2 to olist_order_items, 1 to olist_products
+
+---
+
+### `join_advisor_v3.py` — Level 3
+
+**Objective:** Go beyond metadata — query the actual database to mathematically test whether each join is trustworthy.
+
+**Input:**
+- `olist_dirty.db` — SQLite database with planted data quality issues
+- 5 join pairs to test
+
+**Process:**
+- Connects directly to SQLite and runs SQL queries for each join pair
+- Computes: key overlap %, distinct key counts, orphan row counts, cardinality (1:1 vs 1:many), column type compatibility
+- Generates working JOIN SQL with proper casting where needed
+- Sends all results to Nebius (Llama-3.3-70B) for SAFE/RISKY/UNSAFE classification
+- Writes results back to DataHub as custom properties
+
+**Output:**
+- Terminal report showing overlap %, cardinality, orphan count, and generated SQL for each pair
+- Nebius ratings: SAFE / RISKY / UNSAFE with explanations
+- DataHub Properties updated with: `join_olist_customers_overlap = 92.0%`, `join_olist_customers_orphans = 7955 rows`
+- **Key discovery:** olist_order_items + olist_sellers is UNSAFE (71.8% overlap, 5,632 orphans) — confirming seller ID format mismatch
+
+---
+
+### `join_advisor_enhanced.py` — Deep DataHub Integration
+
+**Objective:** Use the full richness of DataHub metadata — not just schemas, but tags, glossary terms, and ownership — to give Nebius the context it needs for truly intelligent, business-aware analysis.
+
+**Input:**
+- DataHub metadata including:
+  - **Tags:** pii, financial, identifier
+  - **Glossary terms:** Order Status, Customer Identity
+  - **Ownership:** customer_experience_team, finance_team, logistics_team, data_platform_team
+- Real join test results from SQLite
+
+**Process:**
+- Fetches all metadata fields from DataHub for each table
+- Builds a rich context document for each join pair including tags, terms, and owners
+- Sends to Nebius with instructions to reason about PII risk, financial compliance, cross-team governance, and semantic compatibility
+- Writes enriched results back to DataHub
+
+**Output:**
+- Terminal analysis showing:
+  - ⚠️ PII warning: olist_customers has `pii` tag — exposure risk when joining with orders
+  - 💰 Financial flag: olist_order_items has `financial` tag — compliance concerns
+  - 👥 Cross-team alert: olist_orders (data_platform_team) + olist_customers (customer_experience_team)
+  - 📖 Glossary alignment: Order Status + Customer Identity terms confirm semantic compatibility
+- DataHub Properties updated with enriched context-aware join metadata
+
+---
+
+### `watcher_v4_fixed.py` — Level 4
+
+**Objective:** Make the system always-on — automatically detect when new datasets are added to DataHub and immediately analyze them for join opportunities without any human triggering.
+
+**Input:**
+- DataHub REST API polled every 10 seconds
+- Full catalog of existing datasets (15 tracked on startup)
+
+**Process:**
+- Polls DataHub every 10 seconds using URN-based dataset discovery (fixes pagination issue)
+- Compares current dataset list to known list
+- When a new dataset appears: extracts its columns, asks Nebius which existing tables it can join with, writes recommendations back to DataHub
+- Runs indefinitely until manually stopped
+
+**Output:**
+- Terminal shows: `[15:12:27] NEW DATASET DETECTED: olist_reviews_v2`
+- Nebius immediately responds with join candidates
+- DataHub Properties updated with `auto_discovered = true`, `discovery_time`, and join recommendations
+- **Proven working:** detected `olist_reviews_v2` within 10 seconds of injection
+
+---
+
+### `join_advisor_v5.py` — Level 5
+
+**Objective:** Move beyond classification (SAFE/UNSAFE) to deep holistic reasoning — understand WHY problems exist and give analysts specific guidance about which analyses are safe and which are dangerous.
+
+**Input:**
+- Real SQL queries against olist_dirty.db:
+  - Orphan order statuses (delivered, shipped, canceled, etc.)
+  - Orphan orders by month
+  - Sample orphan seller IDs
+- Context from Level 3 results
+
+**Process:**
+- Queries SQLite to find patterns in orphan data
+- Builds a rich evidence document (status breakdown, time distribution, sample IDs)
+- Sends to Nebius with instructions to reason like a senior data engineer
+- Writes holistic analysis back to DataHub
+
+**Output:**
+- Terminal shows Nebius reasoning:
+  - "7,717 of 7,955 orphan orders are `delivered` — spread evenly across months — consistent with GDPR customer purge after delivery, not a data sync issue"
+  - "SAFE for: order volume analysis, revenue reporting, delivery performance"
+  - "RISKY for: customer segmentation, lifetime value analysis, re-engagement campaigns"
+- DataHub Properties updated with holistic analysis text and orphan pattern breakdown
+
+---
+
+### `join_advisor_v6.py` — Level 6
+
+**Objective:** Build a fully automated multi-agent system where three specialized Nebius agents coordinate through DataHub as their shared memory — each reading what the previous wrote and adding its own layer of intelligence.
+
+**Input:**
+- SQLite database schemas (read by Agent 1)
+- Agent 1's output in DataHub (read by Agent 2)
+- Agent 2's output in DataHub (read by Agent 3)
+
+**Process:**
+
+**Agent 1 — Discovery Agent:**
+- Reads all table schemas
+- Asks Nebius to identify join candidates from column naming patterns
+- Writes discovered pairs to DataHub with status: `agent1_status = discovered`
+
+**Agent 2 — Validator Agent:**
+- Reads Agent 1's candidates from DataHub
+- Tests each against real SQLite data (overlap %, orphans, cardinality)
+- Classifies: SAFE / RISKY / UNSAFE
+- Writes validation results to DataHub with status: `agent2_status = validated`
+
+**Agent 3 — SQL Generator Agent:**
+- Reads Agent 2's validation results from DataHub
+- Generates optimized JOIN SQL for each safe/risky pair
+- Uses INNER JOIN for safe pairs, LEFT JOIN with warnings for risky pairs
+- Writes generated SQL to DataHub with status: `agent3_status = sql_generated`
+
+**Output:**
+- Terminal shows all 3 agents working sequentially
+- DataHub Properties contain the full audit trail: discovery → validation → SQL
+- Generated SQL example:
+```sql
+-- SAFE join
+SELECT * FROM olist_orders a
+INNER JOIN olist_customers b ON a.customer_id = b.customer_id;
+
+-- RISKY join with warning
+SELECT * FROM olist_order_items a
+LEFT JOIN olist_sellers b ON a.seller_id = b.seller_id
+WHERE b.seller_id IS NOT NULL;
+-- Warning: 71.8% overlap — seller ID format mismatch detected
+```
+
+---
+
+## DataHub Metadata Used
+
+| Metadata Type | How We Used It |
+|--------------|----------------|
+| Schemas | Column names and types for join candidate discovery |
+| Tags (pii, financial, identifier) | PII risk warnings and financial compliance flags |
+| Glossary Terms | Semantic compatibility checks between tables |
+| Ownership | Cross-team join governance warnings |
+| Lineage | Understanding view→table data flow |
+| Custom Properties | Written back by our system — join quality metrics visible in UI |
+
+---
+
+## The Stack
+
+| Layer | Tool | Role |
+|-------|------|------|
+| Data | SQLite (olist_dirty.db) | Real data with planted quality issues |
+| Metadata | DataHub (localhost:8080) | Context layer — schemas, tags, lineage, glossary |
+| Reasoning | Nebius AI (DeepSeek-R1, Llama-3.3-70B) | Intelligence layer — analysis, reasoning, SQL generation |
+
+---
+
+*Built at the DataHub × Nebius Hackathon, Entrepreneurs First SF, April 10, 2026*
